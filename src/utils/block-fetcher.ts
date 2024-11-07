@@ -1,6 +1,7 @@
 // src/utils/block-fetcher.ts
 
-const EVM_RPC_URL = "https://mainnet.infura.io/v3/REDACTED_RETIRED_CREDENTIAL_000000";
+const EVM_RPC_URL =
+  "https://mainnet.infura.io/v3/REDACTED_RETIRED_CREDENTIAL_000000";
 const SOLANA_RPC_URL =
   "https://solana-mainnet.g.alchemy.com/v2/REDACTED_RETIRED_CREDENTIAL_000000";
 
@@ -97,7 +98,9 @@ export async function getLatestBlockNumber(): Promise<number> {
 }
 
 // Function to get EVM block by timestamp (binary search)
-export async function getEVMBlockByTimestamp(timestamp: number): Promise<number> {
+export async function getEVMBlockByTimestamp(
+  timestamp: number
+): Promise<number> {
   const latestBlock = await getLatestBlockNumber();
   let startBlock = 0;
   let endBlock = latestBlock;
