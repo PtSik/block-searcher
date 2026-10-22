@@ -1,18 +1,27 @@
 {
-  "name": "Block_searcher_CW",
+  "name": "block-searcher-cw",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
-    "test": "vitest"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run types && tsc --noEmit && tsc --noEmit -p test/tsconfig.json",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "types": "wrangler types"
   },
   "dependencies": {
     "hono": "^4.6.9"
   },
   "devDependencies": {
-    "@cloudflare/vitest-pool-workers": "^0.5.40",
-    "@cloudflare/workers-types": "^4.20241022.0",
     "@types/node": "^22.10.2",
-    "vitest": "2.1.8",
-    "wrangler": "^3.83.0"
+    "vitest": "4.1.12",
+    "wrangler": "4.152.0",
+    "@cloudflare/vitest-plugin": "1.4.7",
+    "typescript": "5.9.3"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
   }
 }

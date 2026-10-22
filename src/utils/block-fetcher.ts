@@ -1,261 +1,288 @@
-// src/utils/block-fetcher.ts
-
-const EVM_RPC_URL =
-  "https://mainnet.infura.io/v3/REDACTED_RETIRED_CREDENTIAL_000000";
-const SOLANA_RPC_URL =
-  "https://solana-mainnet.g.alchemy.com/v2/REDACTED_RETIRED_CREDENTIAL_000000";
-
-const MAX_SEARCH_OFFSET = 100;
-const TIME_DIFFERENCE_THRESHOLD = 60; // seconds
-
-const slotTimeCache: Record<number, number> = {};
-const blockTimestampCache: Record<number, number> = {};
-
-// Helper function to delay execution
-export async function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+export interface RpcBindings {
+	EVM_RPC_URL?: string;
+	SOLANA_RPC_URL?: string;
 }
 
-// Retry function for transient errors
-export async function retry<T>(
-  fn: () => Promise<T>,
-  retries = 3,
-  delayMs = 1000
-): Promise<T> {
-  for (let attempt = 0; attempt < retries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt >= retries - 1)
-        throw new Error(`Max retries reached: ${String(error)}`);
-      await delay(delayMs);
-    }
-  }
-  throw new Error("Max retries reached without success.");
-}
+// Each request owns its endpoint configuration and caches.
+export function createBlockFetcher(bindings: RpcBindings) {
+	const EVM_RPC_URL = bindings.EVM_RPC_URL ?? "";
+	const SOLANA_RPC_URL = bindings.SOLANA_RPC_URL ?? "";
+	const MAX_SEARCH_OFFSET = 100;
+	const TIME_DIFFERENCE_THRESHOLD = 60; // seconds
 
-// Define response types
-interface EVMBlockResponse {
-  result: {
-    timestamp: string;
-  } | null;
-}
+	const slotTimeCache: Record<number, number> = {};
+	const blockTimestampCache: Record<number, number> = {};
 
-interface LatestBlockNumberResponse {
-  result: string;
-}
+	// Helper function to delay execution
+	async function delay(ms: number): Promise<void> {
+		return new Promise((resolve) => setTimeout(resolve, ms));
+	}
 
-// Generic function to get cached data
-async function getCachedData<T>(
-  cache: Record<number, T>,
-  key: number,
-  fetchFunc: () => Promise<T>
-): Promise<T> {
-  return retry(async () => {
-    if (key in cache) return cache[key];
-    const data = await fetchFunc();
-    cache[key] = data;
-    return data;
-  });
-}
+	// Retry function for transient errors
+	async function retry<T>(
+		fn: () => Promise<T>,
+		retries = 3,
+		delayMs = 1000,
+	): Promise<T> {
+		for (let attempt = 0; attempt < retries; attempt++) {
+			try {
+				return await fn();
+			} catch (error) {
+				if (attempt >= retries - 1)
+					throw new Error(`Max retries reached: ${String(error)}`);
+				await delay(delayMs);
+			}
+		}
+		throw new Error("Max retries reached without success.");
+	}
 
-// EVM Functions
+	// Define response types
+	interface EVMBlockResponse {
+		result: {
+			timestamp: string;
+		} | null;
+	}
 
-// Function to get block timestamp for EVM with caching
-export async function getBlockTimestamp(blockNumber: number): Promise<number> {
-  return getCachedData(blockTimestampCache, blockNumber, async () => {
-    const response = await fetch(EVM_RPC_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        method: "eth_getBlockByNumber",
-        params: [`0x${blockNumber.toString(16)}`, false],
-        id: 1,
-      }),
-    });
-    const data: EVMBlockResponse = await response.json();
-    if (!data.result)
-      throw new Error(`No data found for block number: ${blockNumber}`);
-    return parseInt(data.result.timestamp, 16);
-  });
-}
+	interface LatestBlockNumberResponse {
+		result: string;
+	}
 
-// Function to get the latest block number (EVM)
-export async function getLatestBlockNumber(): Promise<number> {
-  const response = await fetch(EVM_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "eth_blockNumber",
-      params: [],
-      id: 1,
-    }),
-  });
-  const data: LatestBlockNumberResponse = await response.json();
-  return parseInt(data.result, 16);
-}
+	// Generic function to get cached data
+	async function getCachedData<T>(
+		cache: Record<number, T>,
+		key: number,
+		fetchFunc: () => Promise<T>,
+	): Promise<T> {
+		return retry(async () => {
+			if (key in cache) return cache[key];
+			const data = await fetchFunc();
+			cache[key] = data;
+			return data;
+		});
+	}
 
-// Function to get EVM block by timestamp (binary search)
-export async function getEVMBlockByTimestamp(
-  timestamp: number
-): Promise<number> {
-  const latestBlock = await getLatestBlockNumber();
-  let startBlock = 0;
-  let endBlock = latestBlock;
-  let closestBlock = 0;
-  let closestTimeDifference = Number.MAX_SAFE_INTEGER;
+	// EVM Functions
 
-  while (startBlock <= endBlock) {
-    const middleBlock = Math.floor((startBlock + endBlock) / 2);
-    const middleBlockTime = await getBlockTimestamp(middleBlock);
-    const timeDifference = Math.abs(middleBlockTime - timestamp);
+	// Function to get block timestamp for EVM with caching
+	async function getBlockTimestamp(blockNumber: number): Promise<number> {
+		return getCachedData(blockTimestampCache, blockNumber, async () => {
+			const response = await fetch(EVM_RPC_URL, {
+				method: "POST",
+				headers: { "Content-Type": "application/json" },
+				body: JSON.stringify({
+					jsonrpc: "2.0",
+					method: "eth_getBlockByNumber",
+					params: [`0x${blockNumber.toString(16)}`, false],
+					id: 1,
+				}),
+			});
+			if (!response.ok) throw new Error("RPC request failed");
+			const data: EVMBlockResponse = await response.json();
+			if (!data.result)
+				throw new Error(`No data found for block number: ${blockNumber}`);
+			if (!/^0x[0-9a-f]+$/i.test(data.result.timestamp))
+				throw new Error("Invalid RPC timestamp");
+			return parseInt(data.result.timestamp, 16);
+		});
+	}
 
-    if (timeDifference < closestTimeDifference) {
-      closestBlock = middleBlock;
-      closestTimeDifference = timeDifference;
-    }
+	// Function to get the latest block number (EVM)
+	async function getLatestBlockNumber(): Promise<number> {
+		const response = await fetch(EVM_RPC_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				method: "eth_blockNumber",
+				params: [],
+				id: 1,
+			}),
+		});
+		if (!response.ok) throw new Error("RPC request failed");
+		const data: LatestBlockNumberResponse = await response.json();
+		if (!/^0x[0-9a-f]+$/i.test(data.result))
+			throw new Error("Invalid RPC block number");
+		return parseInt(data.result, 16);
+	}
 
-    if (middleBlockTime === timestamp) {
-      return middleBlock;
-    } else if (middleBlockTime < timestamp) {
-      startBlock = middleBlock + 1;
-    } else {
-      endBlock = middleBlock - 1;
-    }
-  }
+	// Function to get EVM block by timestamp (binary search)
+	async function getEVMBlockByTimestamp(timestamp: number): Promise<number> {
+		const latestBlock = await getLatestBlockNumber();
+		let startBlock = 0;
+		let endBlock = latestBlock;
+		let closestBlock = 0;
+		let closestTimeDifference = Number.MAX_SAFE_INTEGER;
 
-  return closestBlock;
-}
+		while (startBlock <= endBlock) {
+			const middleBlock = Math.floor((startBlock + endBlock) / 2);
+			const middleBlockTime = await getBlockTimestamp(middleBlock);
+			const timeDifference = Math.abs(middleBlockTime - timestamp);
 
-// Solana Functions
+			if (timeDifference < closestTimeDifference) {
+				closestBlock = middleBlock;
+				closestTimeDifference = timeDifference;
+			}
 
-// Function to get the latest slot number (Solana)
-export async function getLatestSlot(): Promise<number> {
-  const response = await fetch(SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "getSlot",
-      params: [],
-      id: 1,
-    }),
-  });
-  const data = (await response.json()) as { result: number };
-  return data.result;
-}
+			if (middleBlockTime === timestamp) {
+				return middleBlock;
+			} else if (middleBlockTime < timestamp) {
+				startBlock = middleBlock + 1;
+			} else {
+				endBlock = middleBlock - 1;
+			}
+		}
 
-// Function to get slot time from Solana with caching
-export async function getCachedSlotTime(slot: number): Promise<number> {
-  return getCachedData(slotTimeCache, slot, async () => {
-    return await getSlotTime(slot);
-  });
-}
+		return closestBlock;
+	}
 
-// Function to get slot time from Solana
-export async function getSlotTime(slot: number): Promise<number> {
-  const response = await fetch(SOLANA_RPC_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      method: "getBlockTime",
-      params: [slot],
-      id: 1,
-    }),
-  });
-  const data = (await response.json()) as { result: number | null };
-  if (data.result === null)
-    throw new Error(`No timestamp found for slot ${slot}`);
-  return data.result;
-}
+	// Solana Functions
 
-// Function to get block number for Solana by timestamp
-export async function getSolanaBlockByTimestamp(
-  timestamp: number
-): Promise<number> {
-  const latestSlot = await getLatestSlot();
-  const genesisTimestamp = await getCachedSlotTime(0);
+	// Function to get the latest slot number (Solana)
+	async function getLatestSlot(): Promise<number> {
+		const response = await fetch(SOLANA_RPC_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				method: "getSlot",
+				params: [],
+				id: 1,
+			}),
+		});
+		if (!response.ok) throw new Error("RPC request failed");
+		const data = (await response.json()) as { result: number };
+		if (!Number.isSafeInteger(data.result) || data.result < 0)
+			throw new Error("Invalid RPC slot");
+		return data.result;
+	}
 
-  if (timestamp <= genesisTimestamp) return 0;
+	// Function to get slot time from Solana with caching
+	async function getCachedSlotTime(slot: number): Promise<number> {
+		return getCachedData(slotTimeCache, slot, async () => {
+			return await getSlotTime(slot);
+		});
+	}
 
-  let startSlot = 0;
-  let endSlot = latestSlot;
-  let closestSlot = 0;
-  let closestTimeDifference = Number.MAX_SAFE_INTEGER;
+	// Function to get slot time from Solana
+	async function getSlotTime(slot: number): Promise<number> {
+		const response = await fetch(SOLANA_RPC_URL, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				jsonrpc: "2.0",
+				method: "getBlockTime",
+				params: [slot],
+				id: 1,
+			}),
+		});
+		if (!response.ok) throw new Error("RPC request failed");
+		const data = (await response.json()) as { result: number | null };
+		if (!Number.isSafeInteger(data.result) || data.result === null)
+			throw new Error(`No timestamp found for slot ${slot}`);
+		return data.result;
+	}
 
-  while (startSlot <= endSlot) {
-    const middleSlot = Math.floor((startSlot + endSlot) / 2);
-    const middleSlotTime = await getCachedSlotTime(middleSlot);
-    const timeDifference = Math.abs(middleSlotTime - timestamp);
+	// Function to get block number for Solana by timestamp
+	async function getSolanaBlockByTimestamp(timestamp: number): Promise<number> {
+		const latestSlot = await getLatestSlot();
+		const genesisTimestamp = await getCachedSlotTime(0);
 
-    if (timeDifference < closestTimeDifference) {
-      closestSlot = middleSlot;
-      closestTimeDifference = timeDifference;
-    }
+		if (timestamp <= genesisTimestamp) return 0;
 
-    if (middleSlotTime === timestamp) {
-      return middleSlot;
-    } else if (middleSlotTime < timestamp) {
-      startSlot = middleSlot + 1;
-    } else {
-      endSlot = middleSlot - 1;
-    }
-  }
+		let startSlot = 0;
+		let endSlot = latestSlot;
+		let closestSlot = 0;
+		let closestTimeDifference = Number.MAX_SAFE_INTEGER;
 
-  return await refineSlotSearchSolana(closestSlot, timestamp);
-}
+		while (startSlot <= endSlot) {
+			const middleSlot = Math.floor((startSlot + endSlot) / 2);
+			const middleSlotTime = await getCachedSlotTime(middleSlot);
+			const timeDifference = Math.abs(middleSlotTime - timestamp);
 
-// Function to refine slot search for Solana
-async function refineSlotSearchSolana(
-  initialSlot: number,
-  targetTimestamp: number
-): Promise<number> {
-  let closestSlot = initialSlot;
-  let closestTimeDifference = Math.abs(
-    (await getCachedSlotTime(initialSlot)) - targetTimestamp
-  );
+			if (timeDifference < closestTimeDifference) {
+				closestSlot = middleSlot;
+				closestTimeDifference = timeDifference;
+			}
 
-  for (let offset = 1; offset <= MAX_SEARCH_OFFSET; offset++) {
-    const forwardSlot = initialSlot + offset;
-    const backwardSlot = initialSlot - offset;
+			if (middleSlotTime === timestamp) {
+				return middleSlot;
+			} else if (middleSlotTime < timestamp) {
+				startSlot = middleSlot + 1;
+			} else {
+				endSlot = middleSlot - 1;
+			}
+		}
 
-    const forwardTime = await getCachedSlotTime(forwardSlot);
-    const forwardDifference = Math.abs(forwardTime - targetTimestamp);
-    if (forwardDifference < closestTimeDifference) {
-      closestSlot = forwardSlot;
-      closestTimeDifference = forwardDifference;
-    }
+		return await refineSlotSearchSolana(closestSlot, timestamp, latestSlot);
+	}
 
-    const backwardTime = await getCachedSlotTime(backwardSlot);
-    const backwardDifference = Math.abs(backwardTime - targetTimestamp);
-    if (backwardDifference < closestTimeDifference) {
-      closestSlot = backwardSlot;
-      closestTimeDifference = backwardDifference;
-    }
+	// Function to refine slot search for Solana
+	async function refineSlotSearchSolana(
+		initialSlot: number,
+		targetTimestamp: number,
+		latestSlot: number,
+	): Promise<number> {
+		let closestSlot = initialSlot;
+		let closestTimeDifference = Math.abs(
+			(await getCachedSlotTime(initialSlot)) - targetTimestamp,
+		);
 
-    if (closestTimeDifference <= TIME_DIFFERENCE_THRESHOLD) break;
-  }
+		for (let offset = 1; offset <= MAX_SEARCH_OFFSET; offset++) {
+			const forwardSlot = initialSlot + offset;
+			const backwardSlot = initialSlot - offset;
 
-  return closestSlot;
-}
+			const forwardTime =
+				forwardSlot <= latestSlot
+					? await getCachedSlotTime(forwardSlot)
+					: Infinity;
+			const forwardDifference = Math.abs(forwardTime - targetTimestamp);
+			if (forwardDifference < closestTimeDifference) {
+				closestSlot = forwardSlot;
+				closestTimeDifference = forwardDifference;
+			}
 
-// Function to get timestamp by block number (EVM)
-export async function getTimestampByBlockNumber(
-  blockNumber: number
-): Promise<number> {
-  return getBlockTimestamp(blockNumber);
-}
+			const backwardTime =
+				backwardSlot >= 0 ? await getCachedSlotTime(backwardSlot) : Infinity;
+			const backwardDifference = Math.abs(backwardTime - targetTimestamp);
+			if (backwardDifference < closestTimeDifference) {
+				closestSlot = backwardSlot;
+				closestTimeDifference = backwardDifference;
+			}
 
-// Function to get timestamp by slot number (Solana)
-export async function getTimestampBySlot(slot: number): Promise<number> {
-  const latestSlot = await getLatestSlot();
-  if (slot < 0 || slot > latestSlot) {
-    throw new Error(
-      `Slot ${slot} is out of range. Latest slot is ${latestSlot}.`
-    );
-  }
-  return getCachedSlotTime(slot);
+			if (closestTimeDifference <= TIME_DIFFERENCE_THRESHOLD) break;
+		}
+
+		return closestSlot;
+	}
+
+	// Function to get timestamp by block number (EVM)
+	async function getTimestampByBlockNumber(
+		blockNumber: number,
+	): Promise<number> {
+		return getBlockTimestamp(blockNumber);
+	}
+
+	// Function to get timestamp by slot number (Solana)
+	async function getTimestampBySlot(slot: number): Promise<number> {
+		const latestSlot = await getLatestSlot();
+		if (slot < 0 || slot > latestSlot) {
+			throw new Error(
+				`Slot ${slot} is out of range. Latest slot is ${latestSlot}.`,
+			);
+		}
+		return getCachedSlotTime(slot);
+	}
+
+	return {
+		delay,
+		retry,
+		getBlockTimestamp,
+		getLatestBlockNumber,
+		getEVMBlockByTimestamp,
+		getLatestSlot,
+		getSlotTime,
+		getSolanaBlockByTimestamp,
+		getTimestampByBlockNumber,
+		getTimestampBySlot,
+	};
 }
